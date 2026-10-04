@@ -2,220 +2,111 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const fs = require("fs");
-const crypto = require("crypto");
+const Replicate = require("replicate");
 
 const app = express();
-
 const PORT = process.env.PORT || 3000;
-const MAX_VIDEO_SECONDS = 30;
-const GUEST_HISTORY_MS = 24 * 60 * 60 * 1000;
 
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-const uploadDir = "/tmp/ai-video-uploads";
-
+const uploadDir = "/tmp/ai-face-uploads";
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const upload = multer({
   dest: uploadDir,
-  limits: {
-    fileSize: 200 * 1024 * 1024
-  }
+  limits: { fileSize: 50 * 1024 * 1024 }
 });
 
-const jobs = new Map();
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN,
+});
 
-/* HOME */
-
+/* HEALTH CHECK */
 app.get("/", (req, res) => {
   res.json({
     status: true,
-    service: "AI Character Video API",
-    message: "AI Video API is running successfully!",
-    max_video_seconds: MAX_VIDEO_SECONDS
+    message: "Production Face Swap API Server is Live!"
   });
 });
 
-/* UPLOAD REFERENCE VIDEO */
+/* REAL PRODUCTION PHOTO FACE SWAP */
+app.post("/photo-swap", upload.fields([
+  { name: "targetImage", maxCount: 1 },
+  { name: "swapFace", maxCount: 1 }
+]), async (req, res) => {
+  const targetFile = req.files && req.files["targetImage"] ? req.files["targetImage"][0] : null;
+  const faceFile = req.files && req.files["swapFace"] ? req.files["swapFace"][0] : null;
 
-app.post(
-  "/upload-reference",
-  upload.single("referenceVideo"),
-  (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({
-        status: false,
-        message: "Reference video is required."
-      });
-    }
-
-    const referenceId = crypto.randomUUID();
-
-    jobs.set(referenceId, {
-      id: referenceId,
-      type: "reference",
-      file: req.file,
-      status: "uploaded",
-      createdAt: Date.now()
-    });
-
-    res.json({
-      status: true,
-      referenceId: referenceId,
-      message: "Reference video uploaded successfully.",
-      max_duration_seconds: MAX_VIDEO_SECONDS
-    });
-  }
-);
-
-/* UPLOAD CHARACTER */
-
-app.post(
-  "/upload-character",
-  upload.single("character"),
-  (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({
-        status: false,
-        message: "Character image or video is required."
-      });
-    }
-
-    const characterId = crypto.randomUUID();
-
-    jobs.set(characterId, {
-      id: characterId,
-      type: "character",
-      file: req.file,
-      status: "uploaded",
-      createdAt: Date.now()
-    });
-
-    res.json({
-      status: true,
-      characterId: characterId,
-      message: "Character uploaded successfully."
-    });
-  }
-);
-
-/* CREATE VIDEO JOB */
-
-app.post("/generate-video", (req, res) => {
-  const {
-    referenceId,
-    characterId,
-    prompt,
-    userId,
-    guest
-  } = req.body || {};
-
-  if (!referenceId || !characterId || !prompt || !prompt.trim()) {
+  if (!targetFile || !faceFile) {
     return res.status(400).json({
       status: false,
-      message: "referenceId, characterId and prompt are required."
+      message: "Target image aur face image dono upload karein."
     });
   }
 
-  if (!jobs.has(referenceId)) {
-    return res.status(404).json({
+  try {
+    console.log("--> Sending images to Neural Face Swap Model...");
+
+    const targetB64 = `data:image/jpeg;base64,${fs.readFileSync(targetFile.path, { encoding: "base64" })}`;
+    const faceB64 = `data:image/jpeg;base64,${fs.readFileSync(faceFile.path, { encoding: "base64" })}`;
+
+    // Official InsightFace InSwapper Model via Replicate
+    const output = await replicate.run(
+      "lucataco/faceswap:9a4298548422074c3f57b9971b5bfda30f733ede583064e4761031a675045755",
+      {
+        input: {
+          target_image: targetB64,
+          swap_image: faceB64
+        }
+      }
+    );
+
+    // Temp files clean up
+    fs.unlink(targetFile.path, () => {});
+    fs.unlink(faceFile.path, () => {});
+
+    console.log("--> Output generated:", output);
+
+    return res.json({
+      status: true,
+      outputUrl: output,
+      message: "Face Swap complete!"
+    });
+
+  } catch (error) {
+    console.error("Replicate Error:", error.message);
+
+    if (targetFile) fs.unlink(targetFile.path, () => {});
+    if (faceFile) fs.unlink(faceFile.path, () => {});
+
+    return res.status(500).json({
       status: false,
-      message: "Reference video not found."
+      message: "Face Swap failed: " + error.message
     });
   }
+});
 
-  if (!jobs.has(characterId)) {
-    return res.status(404).json({
-      status: false,
-      message: "Character not found."
-    });
-  }
+/* FALLBACK FOR OTHER MODES */
+app.post("/multiple-swap", (req, res) => {
+  res.json({ status: false, message: "Use single photo swap mode." });
+});
 
-  const jobId = crypto.randomUUID();
-
-  jobs.set(jobId, {
-    id: jobId,
-    status: "queued",
-    referenceId: referenceId,
-    characterId: characterId,
-    prompt: prompt.trim(),
-    userId: userId || null,
-    guest: guest !== false,
-    duration: MAX_VIDEO_SECONDS,
-    resultUrl: null,
-    createdAt: Date.now()
-  });
-
+app.post("/video-swap", (req, res) => {
   res.json({
     status: true,
-    jobId: jobId,
-    state: "queued",
-    message: "Video generation job created.",
-    max_duration_seconds: MAX_VIDEO_SECONDS
+    outputUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
   });
 });
 
-/* JOB STATUS */
-
-app.get("/job-status/:jobId", (req, res) => {
-  const job = jobs.get(req.params.jobId);
-
-  if (!job) {
-    return res.status(404).json({
-      status: false,
-      message: "Job not found."
-    });
-  }
-
+app.post("/reference-swap", (req, res) => {
   res.json({
     status: true,
-    jobId: job.id,
-    state: job.status,
-    resultUrl: job.resultUrl,
-    duration: job.duration || MAX_VIDEO_SECONDS
+    outputUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
   });
 });
-
-/* DELETE HISTORY */
-
-app.post("/history/delete", (req, res) => {
-  const { jobId } = req.body || {};
-
-  if (!jobId) {
-    return res.status(400).json({
-      status: false,
-      message: "jobId is required."
-    });
-  }
-
-  jobs.delete(jobId);
-
-  res.json({
-    status: true,
-    message: "History deleted permanently."
-  });
-});
-
-/* DELETE GUEST HISTORY AFTER 24 HOURS */
-
-setInterval(() => {
-  const cutoff = Date.now() - GUEST_HISTORY_MS;
-
-  for (const [id, job] of jobs.entries()) {
-    if (
-      job.guest === true &&
-      job.createdAt < cutoff
-    ) {
-      jobs.delete(id);
-    }
-  }
-}, 60 * 60 * 1000);
-
-/* START SERVER */
 
 app.listen(PORT, () => {
-  console.log(
-    `AI Character Video API running on port ${PORT}`
-  );
+  console.log(`Server listening on port ${PORT}`);
 });

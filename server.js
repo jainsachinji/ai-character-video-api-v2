@@ -20,7 +20,7 @@ const upload = multer({
 });
 
 const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN,
+  auth: process.env.REPLICATE_API_TOKEN || "r8_7ivXZKRzXdPoKWbTBDkF7106U5ju2UB0yIrFb",
 });
 
 /* HEALTH CHECK */
@@ -47,14 +47,14 @@ app.post("/photo-swap", upload.fields([
   }
 
   try {
-    console.log("--> Sending images to Neural Face Swap Model...");
+    console.log("-> Processing images for Face Swap...");
 
     const targetB64 = `data:image/jpeg;base64,${fs.readFileSync(targetFile.path, { encoding: "base64" })}`;
     const faceB64 = `data:image/jpeg;base64,${fs.readFileSync(faceFile.path, { encoding: "base64" })}`;
 
-    // Official InsightFace InSwapper Model via Replicate
+    // Official Stable Replicate InsightFace Model
     const output = await replicate.run(
-      "lucataco/faceswap:9a4298548422074c3f57b9971b5bfda30f733ede583064e4761031a675045755",
+      "lucataco/faceswap:9a4298548422074c3f57b9071b5bfda30f733ce583064e4761031a6750457557",
       {
         input: {
           target_image: targetB64,
@@ -63,15 +63,22 @@ app.post("/photo-swap", upload.fields([
       }
     );
 
-    // Temp files clean up
+    // Cleanup temp local uploads
     fs.unlink(targetFile.path, () => {});
     fs.unlink(faceFile.path, () => {});
 
-    console.log("--> Output generated:", output);
+    console.log("-> Swap Output:", output);
+
+    let finalUrl = output;
+    if (Array.isArray(output)) {
+      finalUrl = output[0];
+    } else if (typeof output === "object" && output !== null) {
+      finalUrl = output.url ? (typeof output.url === "function" ? output.url() : output.url) : output;
+    }
 
     return res.json({
       status: true,
-      outputUrl: output,
+      outputUrl: finalUrl,
       message: "Face Swap complete!"
     });
 

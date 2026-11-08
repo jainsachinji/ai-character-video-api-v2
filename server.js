@@ -1,119 +1,65 @@
-const express = require("express");
-const cors = require("cors");
-const multer = require("multer");
-const fs = require("fs");
-const Replicate = require("replicate");
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import { Client } from "@gradio/client";
+import fs from "fs";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(express.json());
 
-const uploadDir = "/tmp/ai-face-uploads";
-fs.mkdirSync(uploadDir, { recursive: true });
+// Temp upload folder setup
+const upload = multer({ dest: "uploads/" });
 
-const upload = multer({
-  dest: uploadDir,
-  limits: { fileSize: 50 * 1024 * 1024 }
-});
-
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN || "r8_7ivXZKRzXdPoKWbTBDkF7106U5ju2UB0yIrFb",
-});
-
-/* HEALTH CHECK */
+// Health Check Route
 app.get("/", (req, res) => {
-  res.json({
-    status: true,
-    message: "Production Face Swap API Server is Live!"
-  });
+  res.send("AI Face Swap & Motion Backend is running live!");
 });
 
-/* REAL PRODUCTION PHOTO FACE SWAP */
-app.post("/photo-swap", upload.fields([
-  { name: "targetImage", maxCount: 1 },
-  { name: "swapFace", maxCount: 1 }
-]), async (req, res) => {
-  const targetFile = req.files && req.files["targetImage"] ? req.files["targetImage"][0] : null;
-  const faceFile = req.files && req.files["swapFace"] ? req.files["swapFace"][0] : null;
-
-  if (!targetFile || !faceFile) {
-    return res.status(400).json({
-      status: false,
-      message: "Target image aur face image dono upload karein."
-    });
-  }
-
+// Photo Swap Free Route (Hugging Face Space)
+app.post("/photo-swap", upload.fields([{ name: "targetImage" }, { name: "swapFace" }]), async (req, res) => {
   try {
-    console.log("-> Processing images for Face Swap...");
+    const targetFile = req.files["targetImage"] ? req.files["targetImage"][0] : null;
+    const sourceFaceFile = req.files["swapFace"] ? req.files["swapFace"][0] : null;
 
-    const targetB64 = `data:image/jpeg;base64,${fs.readFileSync(targetFile.path, { encoding: "base64" })}`;
-    const faceB64 = `data:image/jpeg;base64,${fs.readFileSync(faceFile.path, { encoding: "base64" })}`;
-
-    // Official Stable Replicate InsightFace Model
-    const output = await replicate.run(
-      "lucataco/faceswap:9a4298548422074c3f57b9071b5bfda30f733ce583064e4761031a6750457557",
-      {
-        input: {
-          target_image: targetB64,
-          swap_image: faceB64
-        }
-      }
-    );
-
-    // Cleanup temp local uploads
-    fs.unlink(targetFile.path, () => {});
-    fs.unlink(faceFile.path, () => {});
-
-    console.log("-> Swap Output:", output);
-
-    let finalUrl = output;
-    if (Array.isArray(output)) {
-      finalUrl = output[0];
-    } else if (typeof output === "object" && output !== null) {
-      finalUrl = output.url ? (typeof output.url === "function" ? output.url() : output.url) : output;
+    if (!targetFile || !sourceFaceFile) {
+      return res.status(400).json({ status: false, message: "Dono photos upload karein." });
     }
 
-    return res.json({
-      status: true,
-      outputUrl: finalUrl,
-      message: "Face Swap complete!"
+    // Hugging Face ke free Face Swap Space se connect
+    const client = await Client.connect("tonyassi/face-swap");
+
+    const targetBlob = new Blob([fs.readFileSync(targetFile.path)]);
+    const sourceBlob = new Blob([fs.readFileSync(sourceFaceFile.path)]);
+
+    // AI Prediction call (No Token / Free)
+    const result = await client.predict("/predict", {
+      target: targetBlob,
+      source: sourceBlob,
     });
+
+    // Temp local files delete karein
+    try {
+      fs.unlinkSync(targetFile.path);
+      fs.unlinkSync(sourceFaceFile.path);
+    } catch (e) {}
+
+    // Output URL return
+    if (result && result.data && result.data[0]) {
+      const outputUrl = result.data[0].url || result.data[0];
+      return res.json({ status: true, outputUrl: outputUrl });
+    } else {
+      throw new Error("AI output URL generate nahi ho payi.");
+    }
 
   } catch (error) {
-    console.error("Replicate Error:", error.message);
-
-    if (targetFile) fs.unlink(targetFile.path, () => {});
-    if (faceFile) fs.unlink(faceFile.path, () => {});
-
-    return res.status(500).json({
-      status: false,
-      message: "Face Swap failed: " + error.message
-    });
+    console.error("Swap Error:", error);
+    return res.status(500).json({ status: false, message: error.message || "Face swap failed" });
   }
 });
 
-/* FALLBACK FOR OTHER MODES */
-app.post("/multiple-swap", (req, res) => {
-  res.json({ status: false, message: "Use single photo swap mode." });
-});
-
-app.post("/video-swap", (req, res) => {
-  res.json({
-    status: true,
-    outputUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-  });
-});
-
-app.post("/reference-swap", (req, res) => {
-  res.json({
-    status: true,
-    outputUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });

@@ -1,14 +1,16 @@
 {
-  "name": "ai-character-video-api",
+  "name": "ai-character-video-api-v2",
   "version": "1.0.0",
+  "description": "Free AI Face Swap API",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@gradio/client": "^1.8.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1",
-    "replicate": "^0.30.2"
+    "multer": "^1.4.5-lts.1"
   }
 }
